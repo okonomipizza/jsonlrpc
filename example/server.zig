@@ -45,22 +45,6 @@ fn write(socket: posix.socket_t, msg: []const u8) !void {
     }
 }
 
-fn readMessage(socket: posix.socket_t, buf: []u8) ![]u8 {
-    var pos: usize = 0;
-    while (true) {
-        const n = try posix.read(socket, buf[pos..]);
-        if (n == 0) {
-            return error.Closed;
-        }
-        const end = pos + n;
-        const index = std.mem.indexOf(u8, buf, "\n") orelse {
-            pos = end;
-            continue;
-        };
-        return buf[0 .. pos + index];
-    }
-}
-
 const Client = struct {
     socket: posix.socket_t,
     address: std.net.Address,
@@ -88,9 +72,10 @@ const Client = struct {
         try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &std.mem.toBytes(timeout));
         try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &std.mem.toBytes(timeout));
 
-        var buf: [1024]u8 = undefined;
+        var stream = try jsonlrpc.JsonStream.init(allocator);
+        defer stream.deinit();
 
-        const msg = try readMessage(socket, buf[0..]);
+        const msg = try stream.readBuf(socket);
         const deserialized = try jsonlrpc.RequestObject.fromSlice(arena_allocator, msg);
 
         std.debug.print("Got: {}\n", .{deserialized});

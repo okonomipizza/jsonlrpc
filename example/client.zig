@@ -5,6 +5,9 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
+    var stream = try jsonlrpc.JsonStream.init(allocator);
+    defer stream.deinit();
+
     // Connect to a JSON-RPC server.
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
     const tpe: u32 = posix.SOCK.STREAM;
@@ -23,16 +26,5 @@ pub fn main() !void {
     };
 
     const serialized_req = try request.serialize(allocator);
-    try write(socket, serialized_req);
-}
-
-fn write(socket: posix.socket_t, msg: []const u8) !void {
-    var pos: usize = 0;
-    while (pos < msg.len) {
-        const written = try posix.write(socket, msg[pos..]);
-        if (written == 0) {
-            return error.Closed;
-        }
-        pos += written;
-    }
+    try stream.writeBuf(socket, serialized_req);
 }
