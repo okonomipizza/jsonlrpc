@@ -66,7 +66,12 @@ const Client = struct {
 
         const msg = try stream.readBuf(socket);
         const deserialized = try jsonlrpc.RequestObject.fromSlice(arena_allocator, msg);
-
         std.debug.print("Got: {}\n", .{deserialized});
+
+        const id = deserialized.id orelse return error.ExpectedRequestedId;
+
+        const response_obj = jsonlrpc.ResponseObject.newSuccess(jsonlrpc.JsonRpcVersion.v2, std.json.Value{ .string = deserialized.method }, id);
+        try stream.writeBuf(socket, try response_obj.serialize(allocator));
+        std.debug.print("Respond to: {}\n", .{self.address});
     }
 };

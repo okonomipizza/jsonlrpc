@@ -27,4 +27,9 @@ pub fn main() !void {
 
     const serialized_req = try request.serialize(allocator);
     try stream.writeBuf(socket, serialized_req);
+
+    // Response
+    const response = try stream.readBuf(socket);
+    const deserialized = try jsonlrpc.ResponseObject.fromSlice(allocator, response);
+    std.debug.print("Response: {}\n", .{deserialized});
 }
