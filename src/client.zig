@@ -34,11 +34,10 @@ pub const RpcClient = struct {
     }
 
     /// Send request to server and get response.
-    pub fn call(self: *Self, request: RequestObject) !ResponseObject {
+    pub fn call(self: *Self, request: []u8) !ResponseObject {
         const allocator = self.arena.allocator();
 
-        const serialized_req = try request.serialize(allocator);
-        try self.stream.writeBuf(serialized_req);
+        try self.stream.writeBuf(request);
 
         // Read raw binary response from server.
         const raw_response = try self.stream.readBuf();
@@ -46,5 +45,26 @@ pub const RpcClient = struct {
         const response_obj = try ResponseObject.fromSlice(allocator, raw_response);
 
         return response_obj;
+    }
+
+    pub fn batchCall(self: *Self, requests: []RequestObject) ![]ResponseObject {
+        const allocator = self.arena.allocator();
+
+        var buffer = std.ArrayList(u8).init(allocator);
+        defer buffer.deinit();
+
+        for (requests) |req| {
+            const serialized = try req.serialize(allocator);
+            defer allocator.free(serialized);
+
+            try buffer.appendSlice(serialized);
+        }
+
+        const combined_data = try buffer.toOwnedSlice();
+        defer allocator.free(combined_data);
+
+        try self.stream.write(combined_data);
+
+        return try self.stream.readResponse(allocator);
     }
 };

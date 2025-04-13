@@ -19,14 +19,22 @@ pub fn main() !void {
     defer client.deinit();
 
     // Send a request to the server.
-    const request = jsonlrpc.RequestObject{
+    const request1 = jsonlrpc.RequestObject{
         .jsonrpc = jsonlrpc.JsonRpcVersion.v2,
         .id = std.json.Value{ .integer = 1 },
         .method = "foo",
         .params = null,
     };
+    const request2 = jsonlrpc.RequestObject{
+        .jsonrpc = jsonlrpc.JsonRpcVersion.v2,
+        .id = std.json.Value{ .integer = 2 },
+        .method = "bar",
+        .params = null,
+    };
 
-    const response = try client.call(request);
+    var requests = [_]jsonlrpc.RequestObject{ request1, request2 };
 
-    std.debug.print("Response: {}\n", .{response});
+    const response = try client.batchCall(&requests);
+
+    std.debug.print("Response: {}\n", .{response.len});
 }

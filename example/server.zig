@@ -2,6 +2,7 @@ const std = @import("std");
 const posix = std.posix;
 const net = std.net;
 const jsonlrpc = @import("jsonlrpc");
+const ResponseObject = jsonlrpc.ResponseObject;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -64,14 +65,24 @@ const Client = struct {
         var stream = try jsonlrpc.JsonStream.init(allocator, socket);
         defer stream.deinit();
 
-        const msg = try stream.readBuf();
-        const deserialized = try jsonlrpc.RequestObject.fromSlice(arena_allocator, msg);
-        std.debug.print("Got: {}\n", .{deserialized});
+        const requests = try stream.readRequest(arena_allocator);
 
-        const id = deserialized.id orelse return error.ExpectedRequestedId;
+        var responses = std.ArrayList(u8).init(allocator);
+        defer responses.deinit();
 
-        const response_obj = jsonlrpc.ResponseObject.newSuccess(jsonlrpc.JsonRpcVersion.v2, std.json.Value{ .string = deserialized.method }, id);
-        try stream.writeBuf(try response_obj.serialize(allocator));
+        for (requests) |request| {
+            const obj = ResponseObject.newSuccess(jsonlrpc.JsonRpcVersion.v2, std.json.Value{ .string = request.method }, request.id orelse return error.Notification);
+            const serialized = try obj.serialize(allocator);
+            defer allocator.free(serialized);
+
+            try responses.appendSlice(serialized);
+        }
+
+        const combined_response = try responses.toOwnedSlice();
+        defer allocator.free(combined_response);
+
+        try stream.write(combined_response);
+
         std.debug.print("Respond to: {}\n", .{self.address});
     }
 };
