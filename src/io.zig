@@ -2,31 +2,29 @@ const std = @import("std");
 const posix = std.posix;
 
 pub const JsonStream = struct {
+    socket: posix.socket_t,
     buf: std.ArrayList(u8),
-    arena: *std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) !Self {
-        const arena = try allocator.create(std.heap.ArenaAllocator);
-        errdefer allocator.destroy(arena);
-        arena.* = std.heap.ArenaAllocator.init(allocator);
-
+    pub fn init(allocator: std.mem.Allocator, socket: posix.socket_t) !Self {
         const buf = try std.ArrayList(u8).initCapacity(allocator, 1024);
 
         return Self{
+            .socket = socket,
             .buf = buf,
-            .arena = arena,
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        const allocator = self.arena.child_allocator;
-        self.arena.deinit();
-        allocator.destroy(self.arena);
+        self.buf.deinit();
     }
 
-    pub fn readBuf(self: *Self, socket: posix.socket_t) ![]u8 {
+    pub fn readBuf(
+        self: *Self,
+    ) ![]u8 {
         try self.buf.resize(0);
 
         while (true) {
@@ -36,7 +34,7 @@ pub const JsonStream = struct {
             const read_buf = self.buf.items.ptr[self.buf.items.len..self.buf.capacity];
 
             // Read data into that slice
-            const n = try posix.read(socket, read_buf);
+            const n = try posix.read(self.socket, read_buf);
             if (n == 0) {
                 return error.Closed;
             }
@@ -46,7 +44,7 @@ pub const JsonStream = struct {
             try self.buf.resize(new_len);
 
             if (std.mem.indexOf(u8, self.buf.items, "\n")) |index| {
-                const result = try self.arena.allocator().dupe(u8, self.buf.items[0..index]);
+                const result = try self.allocator.dupe(u8, self.buf.items[0..index]);
 
                 // Remove the processed data from the buffer (including the newline)
                 std.mem.copyBackwards(u8, self.buf.items, self.buf.items[index + 1 ..]);
@@ -57,11 +55,10 @@ pub const JsonStream = struct {
         }
     }
 
-    pub fn writeBuf(self: *Self, socket: posix.socket_t, msg: []const u8) !void {
-        _ = self;
+    pub fn writeBuf(self: *Self, msg: []const u8) !void {
         var pos: usize = 0;
         while (pos < msg.len) {
-            const written = try posix.write(socket, msg[pos..]);
+            const written = try posix.write(self.socket, msg[pos..]);
             if (written == 0) {
                 return error.Closed;
             }

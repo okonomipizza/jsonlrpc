@@ -1,12 +1,10 @@
 const std = @import("std");
 const posix = std.posix;
 const jsonlrpc = @import("jsonlrpc");
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-
-    var stream = try jsonlrpc.JsonStream.init(allocator);
-    defer stream.deinit();
 
     // Connect to a JSON-RPC server.
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
@@ -17,6 +15,9 @@ pub fn main() !void {
 
     try posix.connect(socket, &address.any, address.getOsSockLen());
 
+    var client = try jsonlrpc.RpcClient.init(allocator, socket);
+    defer client.deinit();
+
     // Send a request to the server.
     const request = jsonlrpc.RequestObject{
         .jsonrpc = jsonlrpc.JsonRpcVersion.v2,
@@ -25,11 +26,7 @@ pub fn main() !void {
         .params = null,
     };
 
-    const serialized_req = try request.serialize(allocator);
-    try stream.writeBuf(socket, serialized_req);
+    const response = try client.call(request);
 
-    // Response
-    const response = try stream.readBuf(socket);
-    const deserialized = try jsonlrpc.ResponseObject.fromSlice(allocator, response);
-    std.debug.print("Response: {}\n", .{deserialized});
+    std.debug.print("Response: {}\n", .{response});
 }

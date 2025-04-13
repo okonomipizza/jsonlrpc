@@ -61,17 +61,17 @@ const Client = struct {
         try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &std.mem.toBytes(timeout));
         try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &std.mem.toBytes(timeout));
 
-        var stream = try jsonlrpc.JsonStream.init(allocator);
+        var stream = try jsonlrpc.JsonStream.init(allocator, socket);
         defer stream.deinit();
 
-        const msg = try stream.readBuf(socket);
+        const msg = try stream.readBuf();
         const deserialized = try jsonlrpc.RequestObject.fromSlice(arena_allocator, msg);
         std.debug.print("Got: {}\n", .{deserialized});
 
         const id = deserialized.id orelse return error.ExpectedRequestedId;
 
         const response_obj = jsonlrpc.ResponseObject.newSuccess(jsonlrpc.JsonRpcVersion.v2, std.json.Value{ .string = deserialized.method }, id);
-        try stream.writeBuf(socket, try response_obj.serialize(allocator));
+        try stream.writeBuf(try response_obj.serialize(allocator));
         std.debug.print("Respond to: {}\n", .{self.address});
     }
 };

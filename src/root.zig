@@ -7,3 +7,5 @@ pub const ResponseObject = @import("type.zig").ResponseObject;
 pub const JsonRpcVersion = @import("type.zig").JsonRpcVersion;
 
 pub const JsonStream = @import("io.zig").JsonStream;
+
+pub const RpcClient = @import("client.zig").RpcClient;
