@@ -9,3 +9,6 @@ pub const JsonRpcVersion = @import("type.zig").JsonRpcVersion;
 pub const JsonStream = @import("io.zig").JsonStream;
 
 pub const RpcClient = @import("client.zig").RpcClient;
+
+pub const Server = @import("server.zig").Server;
+pub const Client = @import("server.zig").Client;

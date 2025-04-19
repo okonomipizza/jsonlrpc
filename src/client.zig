@@ -1,70 +1,59 @@
 const JsonStream = @import("io.zig").JsonStream;
 pub const RequestObject = @import("type.zig").RequestObject;
 pub const ResponseObject = @import("type.zig").ResponseObject;
+const Reader = @import("io.zig").Reader;
 const std = @import("std");
 const posix = std.posix;
+const Allocator = std.mem.Allocator;
 
 pub const RpcClient = struct {
     socket: posix.socket_t,
-    stream: JsonStream,
-    arena: *std.heap.ArenaAllocator,
-
-    const Self = @This();
+    reader: Reader,
+    allocator: Allocator,
 
     pub fn init(allocator: std.mem.Allocator, socket: posix.socket_t) !RpcClient {
-        const arena = try allocator.create(std.heap.ArenaAllocator);
-        errdefer allocator.destroy(arena);
-        arena.* = std.heap.ArenaAllocator.init(allocator);
+        // const stream = try JsonStream.init(allocator, socket);
+        const reader = try Reader.init(allocator, 4096);
+        errdefer reader.deinit(allocator);
 
-        const stream = try JsonStream.init(arena.allocator(), socket);
-
-        return RpcClient{
+        return .{
             .socket = socket,
-            .stream = stream,
-            .arena = arena,
+            .reader = reader,
+            .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.stream.deinit();
-
-        const allocator = self.arena.child_allocator;
-        self.arena.deinit();
-        allocator.destroy(self.arena);
+    pub fn deinit(self: *RpcClient) void {
+        self.reader.deinit(self.allocator);
     }
 
     /// Send request to server and get response.
-    pub fn call(self: *Self, request: []u8) !ResponseObject {
-        const allocator = self.arena.allocator();
+    pub fn call(self: *RpcClient, request: RequestObject) ![]u8 {
+        const allocator = self.allocator;
 
-        try self.stream.writeBuf(request);
+        const serialized_request = try request.serialize(allocator);
+        defer allocator.free(serialized_request);
 
-        // Read raw binary response from server.
-        const raw_response = try self.stream.readBuf();
-        // Deserialize the raw data into a structured response object.
-        const response_obj = try ResponseObject.fromSlice(allocator, raw_response);
+        try self.sendRequest(serialized_request);
 
-        return response_obj;
+        return try self.readResponse();
     }
 
-    pub fn batchCall(self: *Self, requests: []RequestObject) ![]ResponseObject {
-        const allocator = self.arena.allocator();
+    fn readResponse(self: *RpcClient) ![]u8 {
+        return self.reader.readMessage(self.socket) catch |err| {
+            std.debug.print("Error: {}", .{err});
+            return err;
+        };
+    }
 
-        var buffer = std.ArrayList(u8).init(allocator);
-        defer buffer.deinit();
-
-        for (requests) |req| {
-            const serialized = try req.serialize(allocator);
-            defer allocator.free(serialized);
-
-            try buffer.appendSlice(serialized);
+    fn sendRequest(self: *RpcClient, msg: []const u8) !void {
+        var pos: usize = 0;
+        while (pos < msg.len) {
+            const written = try posix.write(self.socket, msg[pos..]);
+            if (written == 0) {
+                return error.Closed;
+            }
+            pos += written;
         }
-
-        const combined_data = try buffer.toOwnedSlice();
-        defer allocator.free(combined_data);
-
-        try self.stream.write(combined_data);
-
-        return try self.stream.readResponse(allocator);
     }
 };
