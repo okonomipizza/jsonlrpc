@@ -19,8 +19,9 @@ pub fn main() !void {
     defer client.deinit();
 
     // Send a request to the server.
-    var request = try jsonlrpc.RequestObject.init(allocator, jsonlrpc.JsonRpcVersion.v2, "foo", null, std.json.Value{ .integer = 1 });
+    var request = try jsonlrpc.RequestObject.init(allocator, jsonlrpc.JsonRpcVersion.v2, "foo1", null, std.json.Value{ .integer = 1 });
     defer request.deinit();
+
     const response = try client.call(request);
 
     std.debug.print("Response: {s}\n", .{response});

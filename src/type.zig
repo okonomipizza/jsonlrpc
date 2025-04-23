@@ -407,7 +407,7 @@ pub const RequestObject = struct {
 
         if (self.getId()) |id| {
             switch (id) {
-                .integer, .string => {}, // OK
+                .integer, .string, .null => {}, // OK
                 else => return error.InvalidId,
             }
         }

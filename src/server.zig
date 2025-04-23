@@ -17,9 +17,11 @@ const READ_TIMEOUT_MS = 60_000;
 const ClientList = std.DoublyLinkedList(*Client);
 const ClientNode = ClientList.Node;
 
+/// `Server` provides a server implementation for JSON-RPC protocol communication over a socket.
+/// The server handles incoming client connections and processes JSON-RPC messages.
+/// Custom message handling logic can be implemented by providing a message handler
+/// function when initializeng the server.
 pub const Server = struct {
-    // creates our polls and clients slices and is passed to Client.init
-    // for it to create our read buffer.
     allocator: Allocator,
 
     // The number of clients we currently have connected
@@ -46,9 +48,9 @@ pub const Server = struct {
     client_node_pool: std.heap.MemoryPool(ClientList.Node),
 
     // callback function to handle message which server received
-    message_handler: *const fn (client: *Client, allocator: Allocator, message: []const u8) anyerror!?[]u8,
+    message_handler: *const fn (client: *Client, allocator: Allocator, message: []const []const u8) anyerror!?[]ResponseObject,
 
-    pub fn init(allocator: Allocator, max: usize, handler: *const fn (client: *Client, allocator: Allocator, message: []const u8) anyerror!?[]u8) !Server {
+    pub fn init(allocator: Allocator, max: usize, handler: *const fn (client: *Client, allocator: Allocator, message: []const []const u8) anyerror!?[]ResponseObject) !Server {
         // + 1 for the listening socket
         const polls = try allocator.alloc(posix.pollfd, max + 1);
         errdefer allocator.free(polls);
@@ -91,7 +93,7 @@ pub const Server = struct {
             _ = try posix.poll(self.polls[0 .. self.connected + 1], next_timeout);
 
             if (self.polls[0].revents != 0) {
-                // listening socket is ready
+                // Listening socket is ready
                 self.accept(listener) catch |err| log.err("failed to accept: {}", .{err});
             }
 
@@ -99,23 +101,25 @@ pub const Server = struct {
             while (i < self.connected) {
                 const revents = self.client_polls[i].revents;
                 if (revents == 0) {
-                    // this socket isn't ready, move on to the next one
+                    // This socket isn't ready, move on to the next one
                     i += 1;
                     continue;
                 }
 
                 var client = self.clients[i];
                 if (revents & posix.POLL.IN == posix.POLL.IN) {
-                    // this socket is ready to be read
+                    // This socket is ready to be read
                     while (true) {
-                        const msg = client.readMessage() catch {
+                        const msg = client.readMessage(self.allocator) catch {
                             self.removeClient(i);
                             break;
                         } orelse {
-                            // no more messages, but this client is still connected
+                            // No more messages, but this client is still connected
+
                             i += 1;
                             break;
                         };
+                        defer self.allocator.free(msg);
 
                         client.read_timeout = std.time.milliTimestamp() + READ_TIMEOUT_MS;
                         read_timeout_list.remove(client.reade_timeout_node);
@@ -128,7 +132,7 @@ pub const Server = struct {
                         const response = try self.message_handler(client, self.allocator, msg) orelse break;
                         defer self.allocator.free(response);
 
-                        const written = client.writeMessage(response) catch {
+                        const written = client.writeMessage(self.allocator, response) catch {
                             self.removeClient(i);
                             break;
                         };
@@ -139,7 +143,7 @@ pub const Server = struct {
                         }
                     }
                 } else if (revents & posix.POLL.OUT == posix.POLL.OUT) {
-                    const written = client.write() catch {
+                    const written = client.writeAllVectored() catch {
                         self.removeClient(i);
                         continue;
                     };
@@ -237,9 +241,9 @@ pub const Client = struct {
 
     reader: Reader,
 
-    to_write: []u8,
-
-    write_buf: []u8,
+    write_vec: []posix.iovec_const,
+    write_vec_index: usize,
+    serialized_responses: [][]u8,
 
     read_timeout: i64,
 
@@ -249,15 +253,20 @@ pub const Client = struct {
         const reader = try Reader.init(allocator, 4096);
         errdefer reader.deinit(allocator);
 
-        const write_buf = try allocator.alloc(u8, 4096);
-        errdefer allocator.free(write_buf);
+        const write_vec = try allocator.alloc(posix.iovec_const, 0);
+        errdefer allocator.free(write_vec);
+
+        const serialized_responses = try allocator.alloc([]u8, 0);
+        errdefer allocator.free(serialized_responses);
 
         return .{
             .reader = reader,
             .socket = socket,
             .address = address,
-            .to_write = &.{},
-            .write_buf = write_buf,
+
+            .write_vec = write_vec,
+            .serialized_responses = serialized_responses,
+            .write_vec_index = 0,
             .read_timeout = 0, // let the server set this
             .reade_timeout_node = undefined, // hack/ugly, let the server set this when init returns
         };
@@ -265,35 +274,50 @@ pub const Client = struct {
 
     fn deinit(self: *const Client, allocator: Allocator) void {
         self.reader.deinit(allocator);
-        allocator.free(self.write_buf);
+
+        for (self.serialized_responses) |serialized| {
+            allocator.free(serialized);
+        }
+        allocator.free(self.serialized_responses);
+        allocator.free(self.write_vec);
     }
 
-    fn readMessage(self: *Client) !?[]const u8 {
-        return self.reader.readMessage(self.socket) catch |err| switch (err) {
+    // arraylistをtoOwnedSliceにして返せるようにする。
+    fn readMessage(self: *Client, allocator: Allocator) !?[][]u8 {
+        return self.reader.readMessage(allocator, self.socket) catch |err| switch (err) {
             error.WouldBlock => return null,
             else => return err,
         };
     }
 
-    fn writeMessage(self: *Client, msg: []const u8) !bool {
-        if (self.to_write.len > 0) {
+    fn writeMessage(self: *Client, allocator: Allocator, responses: []ResponseObject) !bool {
+        if (self.write_vec.len > 0) {
             return error.PendingMessage;
         }
 
-        @memcpy(self.write_buf[0..msg.len], msg);
+        if (self.write_vec.len < responses.len) {
+            self.write_vec = try allocator.realloc(self.write_vec, responses.len);
+            self.serialized_responses = try allocator.realloc(self.serialized_responses, responses.len);
+        }
 
-        self.to_write = self.write_buf[0..msg.len];
+        for (responses, 0..) |response, i| {
+            self.serialized_responses[i] = try response.serialize(allocator);
+        }
 
-        return self.write();
+        for (self.serialized_responses, 0..) |serialized, i| {
+            self.write_vec[i] = posix.iovec_const{
+                .base = serialized.ptr,
+                .len = serialized.len,
+            };
+        }
+
+        self.write_vec_index = 0;
+        return try self.writeAllVectored();
     }
 
-    // Returns `false` if we didn't manage to write the whole mssage
-    // Returns `true` if the message is fully written
-    fn write(self: *Client) !bool {
-        var buf = self.to_write;
-        defer self.to_write = buf;
-        while (buf.len > 0) {
-            const n = posix.write(self.socket, buf) catch |err| switch (err) {
+    fn writeAllVectored(self: *Client) !bool {
+        while (self.write_vec_index < self.write_vec.len) {
+            const n = posix.writev(self.socket, self.write_vec[self.write_vec_index..]) catch |err| switch (err) {
                 error.WouldBlock => return false,
                 else => return err,
             };
@@ -301,9 +325,30 @@ pub const Client = struct {
             if (n == 0) {
                 return error.Closed;
             }
-            buf = buf[n..];
-        } else {
-            return true;
+
+            // Process written bytes
+            var remaining = n;
+            while (remaining > 0 and self.write_vec_index < self.write_vec.len) {
+                const vec = &self.write_vec[self.write_vec_index];
+                if (remaining >= vec.len) {
+                    // This vector is completely consumed
+                    remaining -= vec.len;
+                    self.write_vec_index += 1;
+                } else {
+                    // This vector is partially consumed
+                    vec.base += @intCast(remaining);
+                    vec.len -= @intCast(remaining);
+                    remaining = 0;
+                }
+            }
+
+            // If we've processed all vectors, we're done
+            if (self.write_vec_index >= self.write_vec.len) {
+                return true;
+            }
         }
+
+        // All data has been written
+        return true;
     }
 };

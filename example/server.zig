@@ -4,6 +4,8 @@ const net = std.net;
 const jsonlrpc = @import("jsonlrpc");
 const ResponseObject = jsonlrpc.ResponseObject;
 const RequestObject = jsonlrpc.RequestObject;
+const Client = jsonlrpc.Client;
+const JsonRpcVersion = jsonlrpc.JsonRpcVersion;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -17,20 +19,52 @@ pub fn main() !void {
     std.debug.print("STOPPED\n", .{});
 }
 
-fn handleEchoMessage(client: *jsonlrpc.Client, allocator: std.mem.Allocator, messege: []const u8) !?[]u8 {
+fn handleEchoMessage(client: *Client, allocator: std.mem.Allocator, messeges: []const []const u8) !?[]ResponseObject {
     _ = client;
-    std.debug.print("Got: {s}\n", .{messege});
 
-    var request = try RequestObject.fromSlice(allocator, messege);
-    defer request.deinit();
-
-    const id = request.getId();
-    const method = try request.getMethod();
-    if (id != null and method != null) {
-        var response_obj = try ResponseObject.newSuccess(allocator, jsonlrpc.JsonRpcVersion.v2, std.json.Value{ .string = method.? }, id.?);
-        defer response_obj.deinit();
-        return try response_obj.serialize(allocator);
+    var requests = std.ArrayList(RequestObject).init(allocator);
+    defer {
+        for (requests.items) |*req| {
+            req.deinit();
+        }
+        requests.deinit();
     }
+
+    for (messeges) |msg| {
+        const request = try RequestObject.fromSlice(allocator, msg);
+        try requests.append(request);
+    }
+
+    var responses = std.ArrayList(ResponseObject).init(allocator);
+    errdefer {
+        for (responses.items) |*resp| {
+            resp.deinit();
+        }
+        responses.deinit();
+    }
+
+    for (requests.items) |request| {
+        const id = request.getId();
+        const method = try request.getMethod();
+
+        if (id == null or id.? == .null) {
+            continue;
+        }
+
+        if (method != null) {
+            const response = try ResponseObject.newSuccess(allocator, JsonRpcVersion.v2, std.json.Value{ .string = method.? }, id.?);
+            try responses.append(response);
+        }
+    }
+
+    if (responses.items.len > 0) {
+        return try responses.toOwnedSlice();
+    }
+
+    for (responses.items) |*resp| {
+        resp.deinit();
+    }
+    responses.deinit();
 
     return null;
 }
