@@ -2,6 +2,76 @@ const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
 
+pub fn MaybeBatch(comptime T: type) type {
+    return union(enum) {
+        single: T,
+        batch: std.ArrayList(T),
+
+        const Self = @This();
+
+        pub fn fromSingle(item: T) Self {
+            return Self{ .single = item };
+        }
+
+        pub fn fromArrayList(list: std.ArrayList(T)) Self {
+            return Self{ .batch = list };
+        }
+
+        pub fn count(self: Self) usize {
+            return switch (self) {
+                .single => 1,
+                .batch => |list| list.items.len,
+            };
+        }
+
+        pub fn get(self: Self, index: usize) ?T {
+            return switch (self) {
+                .single => |item| if (index == 0) item else null,
+                .batch => |list| if (index < list.items.len) list.items[index] else null,
+            };
+        }
+
+        pub fn serialize(self: Self, allocator: Allocator) ![][]const u8 {
+            return switch (self) {
+                .single => |item| {
+                    var result = try allocator.alloc([]const u8, 1);
+                    result[0] = try item.serialize(allocator);
+                    return result;
+                },
+                .batch => |list| {
+                    var result = try allocator.alloc([]const u8, list.items.len);
+                    for (list.items, 0..) |item, i| {
+                        result[i] = try item.serialize(allocator);
+                    }
+                    return result;
+                },
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (self) {
+                .single => |obj| obj.deinit(),
+                .batch => |list| list.deinit(),
+            }
+        }
+
+        pub fn print(self: Self) void {
+            switch (self) {
+                .single => |item| {
+                    std.debug.print("Single item:\n", .{});
+                    std.debug.print(" {any}\n", .{item});
+                },
+                .batch => |list| {
+                    std.debug.print("Batch ({} items):\n", .{list.items.len});
+                    for (list.items, 0..) |item, i| {
+                        std.debug.print("  [{}]: {any}\n", .{ i, item });
+                    }
+                },
+            }
+        }
+    };
+}
+
 /// Json-RPC version
 pub const JsonRPCVersion = enum {
     v2,
