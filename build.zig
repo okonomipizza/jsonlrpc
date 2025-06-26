@@ -1,46 +1,32 @@
-//! Use `zig init --strip` next time to generate a project without comments.
 const std = @import("std");
 
-// Although this function looks imperative, it does not perform the build
-// directly and instead it mutates the build graph (`b`) that will be then
-// executed by an external runner. The functions in `std.Build` implement a DSL
-// for defining build steps and express dependencies between them, allowing the
-// build runner to parallelize the build automatically (and the cache system to
-// know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
-    // const jsonlrpc_mod = b.addModule("jsonlrpc", .{ .root_source_file = b.path("src/root.zig") });
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const test_step = b.step("test", "Run all tests in all modes.");
-    const tests = b.addTest(.{
+    _ = b.addModule("jsonlrpc", .{ .root_source_file = b.path("src/root.zig") });
+
+    const test_step = b.step("test", "Run all tests");
+
+    // Test step for root.zig
+    const root_tests = b.addTest(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const run_tests = b.addRunArtifact(tests);
-    test_step.dependOn(&run_tests.step);
+    const run_root_tests = b.addRunArtifact(root_tests);
+    test_step.dependOn(&run_root_tests.step);
 
-    // const example_step = b.step("examples", "Build examples");
-    // for ([_][]const u8{ "client", "server" }) |example_name| {
-    //     const example = b.addExecutable(.{
-    //         .name = example_name,
-    //         .root_source_file = b.path(b.fmt("example/{s}.zig", .{example_name})),
-    //         .target = target,
-    //         .optimize = optimize,
-    //     });
-    //     const install_example = b.addInstallArtifact(example, .{});
-    //     example.root_module.addImport("jsonlrpc", jsonlrpc_mod);
-    //     example_step.dependOn(&example.step);
-    //     example_step.dependOn(&install_example.step);
-    // }
+    // Test step for type.zig
+    const type_tests = b.addTest(.{
+        .root_source_file = b.path("src/types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const run_type_tests = b.addRunArtifact(type_tests);
+    test_step.dependOn(&run_type_tests.step);
 
-    const all_step = b.step("all", "Build everything and runs all tests");
-    all_step.dependOn(test_step);
-    // all_step.dependOn(example_step);
-
-    b.default_step.dependOn(all_step);
+    b.default_step.dependOn(test_step);
 
     // // Standard target options allow the person running `zig build` to choose
     // // what target to build for. Here we do not override the defaults, which
